@@ -1,0 +1,7 @@
+# secrets
+.env
+credentials.json
+token.json
+# Python cache
+__pycache__/
+*.py[cod]
