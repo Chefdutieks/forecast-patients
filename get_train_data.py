@@ -164,5 +164,5 @@ def main():
     return df_processed
 
 
-#if __name__ == "__main__":
-#    main()
+if __name__ == "__main__":
+    main()
