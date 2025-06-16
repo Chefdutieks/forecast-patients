@@ -33,7 +33,6 @@ def get_feature_params(data,active_clients_Day=False, active_clients_month=True)
     active_clients: bool, si on utilise la feature ActiveClients
     active_clients_month: bool, si on utilise la feature ActiveClientsMonth
     """
-def get_feature_params(data, active_clients_Day=False, active_clients_month=True):
     if not active_clients_Day:
         data = data.drop(columns=['ActiveClientsDay'], errors='ignore')
     if not active_clients_month:
