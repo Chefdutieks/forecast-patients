@@ -8,3 +8,5 @@ Waitingtime,doctor,patients.csv
 # Python cache
 __pycache__/
 *.py[cod]
+
+models 
