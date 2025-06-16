@@ -110,7 +110,14 @@ def plot_recent_predictions(model, X, orig, name, weeks):
     """
     # 1) Prépare un DataFrame filtré comme dans filter_exclude
     df = orig.copy().reset_index(drop=True)
-    df = df[(df['Day'].dt.dayofweek != 6) & (df['Holiday'] == 0)]
+    start = pd.to_datetime('08:30').time()
+    end = pd.to_datetime('19:30').time()
+    df = df[
+        (df['Day'].dt.dayofweek != 6)
+        & (df['Patients'] != 0)
+        & (df['Hour'] >= start)
+        & (df['Hour'] <= end)
+    ]
     # 2) Axe des dates/heures
     datetimes = pd.to_datetime(df['Day'].astype(str)) + pd.to_timedelta(df['Hour'].astype(str))
     # 3) Filtrer sur les dernières `weeks` semaines
@@ -173,9 +180,8 @@ def prepare_output_dirs(base='models'):
 
 # ----------------------- Pipeline principal -----------------------
 def main(save_models=True):
-    df = get_train_data.main()
-    proc, orig = data_preprocessing(df)
-    data = filter_exclude(proc)
+    proc, orig = get_train_data.main()
+    data = proc
 
     X = data.drop(columns=['Day', 'Patients'], errors='ignore')
     y = data['Patients']

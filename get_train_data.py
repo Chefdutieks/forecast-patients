@@ -11,9 +11,11 @@ Changer de requête SQL pour inclure clients actifs par jour et par mois.
 
 import pymssql
 import pandas as pd
-import pyodbc
+from vacances_scolaires_france import SchoolHolidayDates
 from dotenv import load_dotenv
+import holidays
 import os
+import re
 load_dotenv()
 
 
@@ -123,25 +125,78 @@ def execute_query(connection, query):
     return pd.read_sql(query, connection)
 
 
-def fill_missing(df):
+def drop_missing(df):
     """
     Complète les créneaux horaires manquants (08:00 à 19:30, toutes les 30 minutes) pour chaque jour.
     """
     df['Day'] = pd.to_datetime(df['Day'])
     df['Hour'] = pd.to_datetime(df['Hour'], format='%H:%M').dt.time
+    # Retirer explicitement les lignes sans patients
+    df = df[df['Patients'] != 0]
 
-    all_days = pd.date_range(start=df['Day'].min(), end=df['Day'].max(), freq='D')
-    all_times = pd.date_range('08:00', '19:30', freq='30min').time
+    return df
 
-    all_slots = pd.MultiIndex.from_product([all_days, all_times], names=['Day', 'Hour']).to_frame(index=False)
-    df_full = pd.merge(all_slots, df, on=['Day', 'Hour'], how='left')
+def data_preprocessing(data):
+    """Prépare les données pour l'entraînement du modèle."""
+    # Filtrer les dimanches, les lignes sans patients et les heures hors plage
+    start = pd.to_datetime('08:30').time()
+    end = pd.to_datetime('19:30').time()
+    data = data[
+        (data['Day'].dt.dayofweek != 6)
+        & (data['Patients'] != 0)
+        & (data['Hour'] >= start)
+        & (data['Hour'] <= end)
+    ]
 
-    df_full['Patients'] = df_full['Patients'].fillna(0)
-    df_full['ActiveClientsDay'] = df_full['ActiveClientsDay'].ffill().bfill()
-    df_full['ActiveClientsMonth'] = df_full['ActiveClientsMonth'].ffill().bfill()
+    # Dates et renommage anciennes colonnes
+    data['Day'] = pd.to_datetime(data['Day'])
+    if 'ActiveClientsDay' in data.columns:
+        data.rename(columns={'ActiveClientsDay': 'ActiveClients'}, inplace=True)
 
-    return df_full
+    # Jours fériés
+    all_holidays = holidays.country_holidays('FR', years=range(2020, 2031))
+    holiday_dates = set(pd.to_datetime(list(all_holidays.keys())))
+    holiday_dates.add(pd.to_datetime('2024-05-30'))
+    data['Holiday'] = data['Day'].isin(holiday_dates).astype(int)
 
+    # Après jour férié (shift 48*30min)
+    data = data.sort_values(['Day', 'Hour'])
+    data['AfterHoliday'] = data['Day'].shift(48).isin(holiday_dates).astype(int)
+
+    # Vacances scolaires
+    school_holidays = SchoolHolidayDates()
+    data['SchoolHoliday'] = data['Day'].apply(lambda x: school_holidays.is_holiday(x.date())).astype(int)
+
+    # Caractéristiques temporelles
+    data['DayOfWeek'] = data['Day'].dt.dayofweek
+    data['Month'] = data['Day'].dt.month
+    data['Year'] = data['Day'].dt.year
+    data['WeekOfYear'] = data['Day'].dt.isocalendar().week.astype(int)
+
+    # Regroupement par semaine du mois (1-5)
+    data['WeekOfMonth'] = ((data['Day'].dt.day - 1) // 7 + 1).astype(int)
+
+    cols = [
+        'Year', 'Month', 'WeekOfYear', 'WeekOfMonth', 'Day', 'Hour',
+        'ActiveClients', 'ActiveClientsMonth', 'Patients',
+        'Holiday', 'AfterHoliday', 'SchoolHoliday'
+    ]
+    original = data[cols].copy()
+
+    # Encodage catégoriel : uniquement Hour et DayOfWeek
+    cats = ['Hour', 'DayOfWeek']
+    for c in cats:
+        data[c] = data[c].astype('category')
+    data = pd.get_dummies(data, columns=cats, drop_first=True)
+
+    data.rename(columns=lambda col: re.sub(r'[^0-9A-Za-z_]', '_', col), inplace=True)
+
+    return data, original
+
+
+# ----------------------- Exclusion des dates -----------------------
+def filter_exclude(data):
+    return data[(data['Day'].dt.dayofweek != 6) & (data['Holiday'] == 0)]
 
 def main():
     """
@@ -154,14 +209,17 @@ def main():
     conn.close()
 
     # Appliquer le traitement des créneaux manquants
-    df_processed = fill_missing(df)
+    df_processed = drop_missing(df)
 
     # Aperçu pour debug
-    print("\nAprès traitement avec fill_missing:")
-    print(df_processed.dtypes)
-    print(df_processed.head())
+    #print("\nAprès traitement avec fill_missing:")
+    #print(df_processed.dtypes)
+    #print(df_processed.head())
 
-    return df_processed
+
+    proc, orig = data_preprocessing(df_processed)
+
+    return proc,orig
 
 
 if __name__ == "__main__":
