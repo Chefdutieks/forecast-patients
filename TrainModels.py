@@ -26,59 +26,19 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import get_train_data
 import joblib
 
-# ----------------------- Prétraitement -----------------------
-def data_preprocessing(data):
-    # Dates et renommage anciennes colonnes
-    data['Day'] = pd.to_datetime(data['Day'])
-    if 'ActiveClientsDay' in data.columns:
-        data.rename(columns={'ActiveClientsDay': 'ActiveClients'}, inplace=True)
-
-    # Jours fériés
-    all_holidays = holidays.country_holidays('FR', years=range(2020, 2031))
-    holiday_dates = set(pd.to_datetime(list(all_holidays.keys())))
-    holiday_dates.add(pd.to_datetime('2024-05-30'))
-    data['Holiday'] = data['Day'].isin(holiday_dates).astype(int)
-
-    # Après jour férié (shift 48*30min)
-    data = data.sort_values(['Day','Hour'])
-    data['AfterHoliday'] = data['Day'].shift(48).isin(holiday_dates).astype(int)
-
-    # Vacances scolaires
-    school_holidays = SchoolHolidayDates()
-    data['SchoolHoliday'] = data['Day'].apply(lambda x: school_holidays.is_holiday(x.date())).astype(int)
-
-    # Caractéristiques temporelles
-    data['DayOfWeek']   = data['Day'].dt.dayofweek 
-    data['Month']       = data['Day'].dt.month
-    data['Year']        = data['Day'].dt.year
-    data['WeekOfYear']  = data['Day'].dt.isocalendar().week.astype(int)
-
-    # Regroupement par semaine du mois (1-5)
-    data['WeekOfMonth'] = ((data['Day'].dt.day - 1) // 7 + 1).astype(int)
-
-    # Construction du jeu final (avant encodage)
-    cols = ['Year','Month','WeekOfYear','WeekOfMonth','Day','Hour','ActiveClients','ActiveClientsMonth',
-            'Patients','Holiday','AfterHoliday','SchoolHoliday']
-    original = data[cols].copy()
-
-    # Encodage catégoriel : uniquement Hour et DayOfWeek
-    cats = ['Hour','DayOfWeek']
-    for c in cats:
-        data[c] = data[c].astype('category')
-    data = pd.get_dummies(data, columns=cats, drop_first=True)
-
-    # ─── SANITIZE FEATURE NAMES ────────────────────────────────────────
-    # Remplace tout caractère non alphanumérique ou underscore par '_'
-    data.rename(
-        columns=lambda col: re.sub(r'[^0-9A-Za-z_]', '_', col),
-        inplace=True
-    )
-
-    return data, original
-
-# ----------------------- Exclusion des dates -----------------------
-def filter_exclude(data):
-    return data[(data['Day'].dt.dayofweek != 6) & (data['Holiday'] == 0)]
+# ----------------------- Paramètres dses features -----------------------
+def get_feature_params(data,active_clients_Day=False, active_clients_month=True):
+    """
+    Enlever les features inutiles pour le modèle.
+    active_clients: bool, si on utilise la feature ActiveClients
+    active_clients_month: bool, si on utilise la feature ActiveClientsMonth
+    """
+    if active_clients_Day == False:
+        data.drop(columns=['ActiveClientsDay'], errors='ignore')
+    if active_clients_month == False:
+        data.drop(columns=['ActiveClientsMonth'], errors='ignore')
+    
+    return data
 
 # ----------------------- Évaluation -----------------------
 def evaluate_model(model, X, y):
@@ -181,7 +141,8 @@ def prepare_output_dirs(base='models'):
 # ----------------------- Pipeline principal -----------------------
 def main(save_models=True):
     proc, orig = get_train_data.main()
-    data = proc
+    data=get_feature_params(proc, active_clients=False, active_clients_month=True)
+
 
     X = data.drop(columns=['Day', 'Patients'], errors='ignore')
     y = data['Patients']

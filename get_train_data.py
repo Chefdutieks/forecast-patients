@@ -4,9 +4,7 @@ Modified on Fri June 13 14:34:13 2025
 
 @author: larrybird
 
-Ce fichier a pour but de récupérer des données d'arrivée de patients depuis la base de données prod-kpi, et d'effectuer un traitement des valeurs manquantes sur ces données pour générer un jeu de données d'entraînement utilisable pour un modèle de prédiction. 
-Le jeu de données contient des informations sur les patients et les clients actifs à différents créneaux horaires au cours de la journée. 
-Changer de requête SQL pour inclure clients actifs par jour et par mois.
+Ce fichier a pour but de récupérer des données d'arrivée de patients depuis la base de données prod-kpi, et d'effectuer un traitement des valeurs manquantes sur ces données pour générer un jeu de données d'entraînement utilisable pour un modèle de prédiction.
 """
 
 import pymssql
@@ -20,24 +18,17 @@ load_dotenv()
 
 
 def get_connection_config():
-    """
-    Retourne la configuration de connexion.
-    """
-    config = {
-        'server':   os.getenv('AZURE_DB_SERVER'),
+    return {
+        'server': os.getenv('AZURE_DB_SERVER'),
         'database': os.getenv('AZURE_DB_NAME'),
-        'user':     os.getenv('AZURE_DB_USER'),
+        'user': os.getenv('AZURE_DB_USER'),
         'password': os.getenv('AZURE_DB_PASSWORD'),
-        'port':     1433
+        'port': 1433
     }
-    return config
 
 
 def get_query():
-    """
-    Requête SQL pour extraire les données nécessaires avec clients actifs jour/mois.
-    """
-    query = """
+    return """
         WITH FilteredMatchings AS (
             SELECT 
                 pm.PatientId,
@@ -100,13 +91,9 @@ def get_query():
             acm.ActiveClientsMonth
         ORDER BY ph.Day, ph.hourRounded;
     """
-    return query
 
 
 def get_connection(config):
-    """
-    Connexion via pymssql pour Azure SQL Database.
-    """
     return pymssql.connect(
         server=config['server'],
         port=config['port'],
@@ -119,108 +106,89 @@ def get_connection(config):
 
 
 def execute_query(connection, query):
-    """
-    Exécute la requête SQL et retourne un DataFrame.
-    """
     return pd.read_sql(query, connection)
 
 
-def drop_missing(df):
-    """
-    Complète les créneaux horaires manquants (08:00 à 19:30, toutes les 30 minutes) pour chaque jour.
-    """
-    df['Day'] = pd.to_datetime(df['Day'])
-    df['Hour'] = pd.to_datetime(df['Hour'], format='%H:%M').dt.time
-    # Retirer explicitement les lignes sans patients
-    df = df[df['Patients'] != 0]
-
-    return df
-
 def data_preprocessing(data):
-    """Prépare les données pour l'entraînement du modèle."""
-    # Filtrer les dimanches, les lignes sans patients et les heures hors plage
+    """
+    Effectue le prétraitement des données extraites de la base de données.
+    - Convertit les colonnes 'Day' et 'Hour' en types datetime appropriés.
+    - Filtre les données pour ne garder que les jours de semaine, les heures entre 08:30 et 19:30,
+    et les patients non nuls.
+    - Ajoute des colonnes pour les jours fériés, les vacances scolaires, le jour de la semaine,
+    le mois, l'année, la semaine de l'année et la semaine du mois.
+    - Effectue un encodage one-hot pour les colonnes 'Hour' et 'DayOfWeek'.
+    - Renomme les colonnes pour enlever les caractères spéciaux.
+    Args:
+        data (pd.DataFrame): DataFrame contenant les données extraites de la base de données.
+    Returns:        
+        pd.DataFrame: DataFrame prétraité avec les colonnes nécessaires pour l'entraînement du modèle.
+        pd.DataFrame: DataFrame original avec les colonnes de base pour référence.
+    """
+    data = data.copy()
+    data['Day'] = pd.to_datetime(data['Day'])
+    data['Hour'] = pd.to_datetime(data['Hour'], format='%H:%M').dt.time
+    
     start = pd.to_datetime('08:30').time()
     end = pd.to_datetime('19:30').time()
     data = data[
-        (data['Day'].dt.dayofweek != 6)
-        & (data['Patients'] != 0)
-        & (data['Hour'] >= start)
-        & (data['Hour'] <= end)
-    ]
+        (data['Day'].dt.dayofweek != 6) &
+        (data['Patients'] != 0) &
+        (data['Hour'] >= start) &
+        (data['Hour'] <= end)
+    ].copy()
 
-    # Dates et renommage anciennes colonnes
-    data['Day'] = pd.to_datetime(data['Day'])
-    if 'ActiveClientsDay' in data.columns:
-        data.rename(columns={'ActiveClientsDay': 'ActiveClients'}, inplace=True)
-
-    # Jours fériés
     all_holidays = holidays.country_holidays('FR', years=range(2020, 2031))
     holiday_dates = set(pd.to_datetime(list(all_holidays.keys())))
     holiday_dates.add(pd.to_datetime('2024-05-30'))
-    data['Holiday'] = data['Day'].isin(holiday_dates).astype(int)
 
-    # Après jour férié (shift 48*30min)
+    data.loc[:, 'Holiday'] = data['Day'].isin(holiday_dates).astype(int)
     data = data.sort_values(['Day', 'Hour'])
-    data['AfterHoliday'] = data['Day'].shift(48).isin(holiday_dates).astype(int)
+    data.loc[:, 'AfterHoliday'] = data['Day'].shift(48).isin(holiday_dates).astype(int)
 
-    # Vacances scolaires
     school_holidays = SchoolHolidayDates()
-    data['SchoolHoliday'] = data['Day'].apply(lambda x: school_holidays.is_holiday(x.date())).astype(int)
+    data.loc[:, 'SchoolHoliday'] = data['Day'].apply(lambda x: school_holidays.is_holiday(x.date())).astype(int)
 
-    # Caractéristiques temporelles
     data['DayOfWeek'] = data['Day'].dt.dayofweek
     data['Month'] = data['Day'].dt.month
     data['Year'] = data['Day'].dt.year
     data['WeekOfYear'] = data['Day'].dt.isocalendar().week.astype(int)
-
-    # Regroupement par semaine du mois (1-5)
     data['WeekOfMonth'] = ((data['Day'].dt.day - 1) // 7 + 1).astype(int)
 
     cols = [
         'Year', 'Month', 'WeekOfYear', 'WeekOfMonth', 'Day', 'Hour',
-        'ActiveClients', 'ActiveClientsMonth', 'Patients',
+        'ActiveClientsDay', 'ActiveClientsMonth', 'Patients',
         'Holiday', 'AfterHoliday', 'SchoolHoliday'
     ]
     original = data[cols].copy()
 
-    # Encodage catégoriel : uniquement Hour et DayOfWeek
-    cats = ['Hour', 'DayOfWeek']
-    for c in cats:
+    for c in ['Hour', 'DayOfWeek']:
         data[c] = data[c].astype('category')
-    data = pd.get_dummies(data, columns=cats, drop_first=True)
+    data = pd.get_dummies(data, columns=['Hour', 'DayOfWeek'], drop_first=True)
 
     data.rename(columns=lambda col: re.sub(r'[^0-9A-Za-z_]', '_', col), inplace=True)
 
     return data, original
 
 
-# ----------------------- Exclusion des dates -----------------------
-def filter_exclude(data):
-    return data[(data['Day'].dt.dayofweek != 6) & (data['Holiday'] == 0)]
-
 def main():
-    """
-    Fonction principale exécutant la chaîne complète : extraction SQL, traitement, et retour du DataFrame final.
-    """
     config = get_connection_config()
     query = get_query()
     conn = get_connection(config)
     df = execute_query(conn, query)
     conn.close()
 
-    # Appliquer le traitement des créneaux manquants
-    df_processed = drop_missing(df)
+    print("Données extraites de la base de données :" f" {df.shape[0]} lignes, {df.shape[1]} colonnes")
 
-    # Aperçu pour debug
-    #print("\nAprès traitement avec fill_missing:")
-    #print(df_processed.dtypes)
-    #print(df_processed.head())
+    proc, orig = data_preprocessing(df)
 
+    print("\nAprès data_preprocessing:"
+          f" {proc.shape[0]} lignes, {proc.shape[1]} colonnes"
+          f"\nColonnes : {proc.columns.tolist()}")
+    print(proc.dtypes)
+    print(proc.head())
 
-    proc, orig = data_preprocessing(df_processed)
-
-    return proc,orig
-
+    return proc, orig
 
 if __name__ == "__main__":
     main()

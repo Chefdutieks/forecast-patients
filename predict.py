@@ -5,8 +5,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import timedelta
-
-from TrainModels import data_preprocessing, filter_exclude, evaluate_model
+from TrainModels import evaluate_model
 import get_train_data
 
 def plot_predictions(datetimes, y_actual, y_pred, name):
@@ -57,8 +56,7 @@ def generate_future_features(orig_df, proc_df, last_dt, weeks=16):
     future_df['Patients'] = 0
 
     # 6) Prétraiter et filtrer comme historique
-    proc_fut, _ = data_preprocessing(future_df)
-    proc_fut = filter_exclude(proc_fut).reset_index(drop=True)
+    proc_fut, _ = get_train_data.data_preprocessing(future_df)
 
     # 7) Construire X_future
     X_future = proc_fut.drop(columns=['Day', 'Patients'], errors='ignore')
@@ -66,10 +64,7 @@ def generate_future_features(orig_df, proc_df, last_dt, weeks=16):
 
 def main(models_dir='models/current', eval_weeks=6, forecast_weeks=16):
     # Charger données
-    df_raw = get_train_data.main()
-    proc_df, orig_df = data_preprocessing(df_raw)
-    proc_df = filter_exclude(proc_df).reset_index(drop=True)
-    orig_df = filter_exclude(orig_df).reset_index(drop=True)
+    proc_df, orig_df = get_train_data.main()
 
     # Construire X,y,datetimes
     X_all = proc_df.drop(columns=['Day', 'Patients'], errors='ignore')
