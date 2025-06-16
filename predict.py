@@ -4,8 +4,8 @@ import joblib
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import timedelta
-from TrainModels import evaluate_model
+from datetime import datetime, timedelta
+from TrainModels import evaluate_model, get_feature_params
 import get_train_data
 
 def plot_predictions(datetimes, y_actual, y_pred, name):
@@ -20,61 +20,41 @@ def plot_predictions(datetimes, y_actual, y_pred, name):
     plt.tight_layout()
     plt.show()
 
-def generate_future_features(orig_df, proc_df, last_dt, weeks=16):
-    # 1) Prochain lundi après last_dt
+def generate_future_features(last_dt, weeks=13):
     next_mon_offset = (7 - last_dt.normalize().weekday()) % 7
     start_date = last_dt.normalize() + pd.Timedelta(days=next_mon_offset)
 
-    # 2) Générer datetimes tous les 30min
     periods = weeks * 7 * 48
-    future_datetimes = pd.date_range(start=start_date, periods=periods, freq='30T')
-    # Construire le masque pour filtrer :
-    # - les heures entre 8h30 et 19h30
-    # - exclure les dimanches (dayofweek == 6)
+    future_datetimes = pd.date_range(start=start_date, periods=periods, freq='30min')
+
     allowed_mask = (
         ((future_datetimes.hour > 8) | ((future_datetimes.hour == 8) & (future_datetimes.minute >= 30))) &
         ((future_datetimes.hour < 19) | ((future_datetimes.hour == 19) & (future_datetimes.minute <= 30))) &
-        (future_datetimes.dayofweek != 6)  # 6 correspond à dimanche
+        (future_datetimes.dayofweek != 6)
     )
     filtered_future_datetimes = future_datetimes[allowed_mask]
 
-    # 3) Construire DataFrame avec heure au format identique au training
     future_df = pd.DataFrame({
         'Day': filtered_future_datetimes.date,
         'Hour': filtered_future_datetimes.strftime('%H:%M:%S')
     })
     future_df['Day'] = pd.to_datetime(future_df['Day'])
 
-    # 4) Imputation ActiveClients et ActiveClientsMonth
-    last_day = proc_df['Day'].max()
-    last_ac = proc_df.loc[proc_df['Day'] == last_day, 'ActiveClients'].iloc[-1]
-    last_acm = proc_df.loc[proc_df['Day'] == last_day, 'ActiveClientsMonth'].iloc[-1]
-    future_df['ActiveClients'] = last_ac
-    future_df['ActiveClientsMonth'] = last_acm
-
-    # 5) Ajouter Patients dummy
-    future_df['Patients'] = 0
-
-    # 6) Prétraiter et filtrer comme historique
-    proc_fut, _ = get_train_data.data_preprocessing(future_df)
-
-    # 7) Construire X_future
+    proc_fut_av,orig = get_train_data.data_preprocessing(future_df)
+    proc_fut=get_feature_params(proc_fut_av, active_clients_Day=False, active_clients_month=False)
     X_future = proc_fut.drop(columns=['Day', 'Patients'], errors='ignore')
-    return future_datetimes, X_future
+    return filtered_future_datetimes, X_future
 
-def main(models_dir='models/current', eval_weeks=6, forecast_weeks=16):
-    # Charger données
-    proc_df, orig_df = get_train_data.main()
-
-    # Construire X,y,datetimes
+def main(models_dir='models/current', eval_weeks=5, forecast_weeks=13):
+    proc_df_av, orig_df_av = get_train_data.main()
+    proc_df = get_feature_params(proc_df_av, active_clients_Day=False, active_clients_month=False)
+    orig_df = get_feature_params(orig_df_av, active_clients_Day=False, active_clients_month=False)
     X_all = proc_df.drop(columns=['Day', 'Patients'], errors='ignore')
     y_all = proc_df['Patients'].values
     datetimes = pd.to_datetime(orig_df['Day'].astype(str)) + pd.to_timedelta(orig_df['Hour'].astype(str))
 
-    # Évaluation historique
     last_dt = datetimes.max()
     cutoff_eval = last_dt - pd.Timedelta(weeks=eval_weeks)
-    # Remonter au lundi
     monday_off = cutoff_eval.weekday()
     start_eval = (cutoff_eval - pd.Timedelta(days=monday_off)).normalize()
     mask_eval = (datetimes >= start_eval) & (datetimes <= last_dt)
@@ -84,13 +64,12 @@ def main(models_dir='models/current', eval_weeks=6, forecast_weeks=16):
 
     print(f"Evaluation sur {eval_weeks} dernières semaines : du {start_eval.date()} au {last_dt.date()}")
 
-    # Prévision future
-    future_dates, X_future = generate_future_features(orig_df, proc_df, last_dt, weeks=forecast_weeks)
+    future_dates, X_future = generate_future_features(last_dt, weeks=forecast_weeks)
     print(f"Prévision sur {forecast_weeks} prochaines semaines : du {future_dates.min().date()} au {future_dates.max().date()}")
 
-    # Boucle sur modèles
-    pkl_files = sorted(glob.glob(os.path.join(models_dir, 'best_*.pkl')))
-    for path in pkl_files:
+    all_forecasts = []
+
+    for path in sorted(glob.glob(os.path.join(models_dir, 'best_*.pkl'))):
         name = os.path.basename(path).replace('.pkl', '')
         model = joblib.load(path)
         print(f"\n=== Modèle : {name} ===")
@@ -104,6 +83,23 @@ def main(models_dir='models/current', eval_weeks=6, forecast_weeks=16):
         # b) Prévision future
         y_pred_fut = model.predict(X_future)
         plot_predictions(future_dates, y_pred_fut, y_pred_fut, f"{name} - Prévision {forecast_weeks} sem.")
+
+        # Collecte des données
+        future_df = pd.DataFrame({
+            'Datetime': future_dates,
+            'PredictedPatients': np.round(y_pred_fut).astype(int),
+            'Model': name
+        })
+        all_forecasts.append(future_df)
+
+    # Timestamp pour le nom du fichier
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    final_filename = f"all_models_forecast_{forecast_weeks}weeks_{timestamp}.csv"
+
+    # Sauvegarde finale
+    full_df = pd.concat(all_forecasts)
+    full_df.to_csv(final_filename, index=False)
+    print(f"Fichier CSV global sauvegardé : {final_filename}")
 
 if __name__ == '__main__':
     main()
