@@ -3,10 +3,12 @@
 credentials.json
 token.json
 
-# Company data
-Waitingtime,doctor,patients.csv
 # Python cache
 __pycache__/
 *.py[cod]
 
+
 models 
+
+# Exclude all CSVs
+*.csv

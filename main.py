@@ -9,7 +9,6 @@ Ce fichier principal planifie une tâche hebdomadaire (à ajuster si besoin) pou
 
 # main.py
 
-import random_forest_model
 import matplotlib
 import data_processing
 import pickle
@@ -29,22 +28,14 @@ def scheduled_task():
     # Choix de la période de prédiction
     start_date_str, end_date_str = data_processing.get_date_range(16)
     
-    # Création et entrainement d'un nouveau modèle 
-    rf_model = random_forest_model.main()
-    print('model created')
     
     # Générer et prédire les données futures
-    future_data = data_processing.generate_and_predict(start_date_str, end_date_str, active_clients_per_month, rf_model)
-    print('data predict')
+    #future_data = data_processing.generate_and_predict(start_date_str, end_date_str, active_clients_per_month, rf_model)
+    #print('data predict')
     # Écrire les données dans Google Sheets
-    data_processing.write_sheet(future_data, existing_df_google_api)
-    print('written on sheets')
+    #data_processing.write_sheet(future_data, existing_df_google_api)
+    #print('written on sheets')
     
-    
-    # Sauvegarder le modèle pour l'API
-    with open('rf_model.pkl', 'wb') as f:
-        pickle.dump(rf_model, f)
-    print("Modèle sauvegardé")
 
 # if __name__ == '__main__':
    #import schedule

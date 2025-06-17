@@ -26,19 +26,6 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import get_train_data
 import joblib
 
-# ----------------------- Paramètres dses features -----------------------
-def get_feature_params(data,active_clients_Day=False, active_clients_month=True):
-    """
-    Enlever les features inutiles pour le modèle.
-    active_clients: bool, si on utilise la feature ActiveClients
-    active_clients_month: bool, si on utilise la feature ActiveClientsMonth
-    """
-    if not active_clients_Day:
-        data = data.drop(columns=['ActiveClientsDay'], errors='ignore')
-    if not active_clients_month:
-        data = data.drop(columns=['ActiveClientsMonth'], errors='ignore')
-    return data
-
 # ----------------------- Évaluation -----------------------
 def evaluate_model(model, X, y):
     y_pred = model.predict(X)
@@ -111,18 +98,23 @@ def plot_recent_predictions(model, X, orig, name, weeks):
 # ----------------------- Modèles & hyperparamètres -----------------------
 def get_models():
     return {
-        'RandomForest': {
-            'model': RandomForestRegressor(random_state=42, n_jobs=-1),
-            'params': {'n_estimators': [100, 300], 'max_depth': [5, 10, None], 'min_samples_split': [2, 5]}
-         },
-        'XGBoost': {
-            'model': xgb.XGBRegressor(objective='reg:squarederror', random_state=42, n_jobs=-1),
-            'params': {'n_estimators': [100,300, 500], 'max_depth': [3, 10], 'learning_rate': [0.01, 0.1]}
-        }#,
-        #'LightGBM': {
-        #    'model': lgb.LGBMRegressor(random_state=42, n_jobs=-1),
-        #    'params': {'n_estimators': [100, 300], 'max_depth': [3, 10], 'learning_rate': [0.01, 0.1]}
-        #}
+        #'RandomForest': {
+        #    'model': RandomForestRegressor(random_state=42, n_jobs=-1),
+        #    'params': {'n_estimators': [100, 300,500], 'max_depth': [5, 10, None], 'min_samples_split': [2, 5]}
+        # },
+        #'XGBoost': {
+        #    'model': xgb.XGBRegressor(objective='reg:squarederror', random_state=42, n_jobs=-1),
+        #    'params': {'n_estimators': [100,300, 500], 'max_depth': [3, 10], 'learning_rate': [0.01, 0.1]}
+        #}#,
+        'LightGBM': {
+            'model': lgb.LGBMRegressor(random_state=42, n_jobs=-1),
+            'params': {
+                'n_estimators': [100, 300],
+                'max_depth': [5, 10],
+                'learning_rate': [0.05, 0.1],
+                'min_child_samples': [10, 20] 
+            }
+        }
     }
 
 # ----------------------- Entraînement CV + GridSearch -----------------------
@@ -149,8 +141,7 @@ def prepare_output_dirs(base='models'):
 
 # ----------------------- Pipeline principal -----------------------
 def main(save_models=True):
-    proc, orig = get_train_data.main()
-    data=get_feature_params(proc, active_clients_Day=False, active_clients_month=False)
+    data, orig = get_train_data.main()
 
     X = data.drop(columns=['Day', 'Patients'], errors='ignore')
     y = data['Patients']
@@ -169,13 +160,13 @@ def main(save_models=True):
                 n_jobs=-1,
                 **best_params,
                 early_stopping_rounds=50,
-                eval_metric='rmse'
+                eval_metric='rmse',
+                max_delta_step=10
             )
             # On passe uniquement eval_set à fit, sans callbacks
             best_model.fit(
                 X, y,
-                eval_set=[(X, y)],
-                verbose=True
+                eval_set=[(X, y)]
             )
         elif name == 'LightGBM':
             best_model.fit(

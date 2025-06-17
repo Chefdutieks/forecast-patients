@@ -11,6 +11,7 @@ import pymssql
 import pandas as pd
 from vacances_scolaires_france import SchoolHolidayDates
 from dotenv import load_dotenv
+from functools import lru_cache
 import holidays
 import os
 import re
@@ -109,28 +110,29 @@ def execute_query(connection, query):
     return pd.read_sql(query, connection)
 
 
+
 def data_preprocessing(data):
     """
-    Effectue le prétraitement des données extraites de la base de données.
-    - Convertit les colonnes 'Day' et 'Hour' en types datetime appropriés.
-    - Filtre les données pour ne garder que les jours de semaine, les heures entre 08:30 et 19:30,
-    et les patients non nuls.
-    - Ajoute des colonnes pour les jours fériés, les vacances scolaires, le jour de la semaine,
-    le mois, l'année, la semaine de l'année et la semaine du mois.
-    - Effectue un encodage one-hot pour les colonnes 'Hour' et 'DayOfWeek'.
-    - Renomme les colonnes pour enlever les caractères spéciaux.
-    Args:
-        data (pd.DataFrame): DataFrame contenant les données extraites de la base de données.
-    Returns:        
-        pd.DataFrame: DataFrame prétraité avec les colonnes nécessaires pour l'entraînement du modèle.
-        pd.DataFrame: DataFrame original avec les colonnes de base pour référence.
+    Prétraitement des données :
+    - Filtrage horaires utiles
+    - Ajout des indicateurs calendaires (fériés, scolaires, etc.)
+    - Encodage one-hot
+    - Suppression conditionnelle des colonnes clients
+    - Ajout : AfterHoliday_Weekday (binaire)
     """
+    import re
+    from vacances_scolaires_france import SchoolHolidayDates
+    import holidays
+    import os
+
     data = data.copy()
+
+    # Conversion
     data['Day'] = pd.to_datetime(data['Day'])
     data['Hour'] = pd.to_datetime(data['Hour'], format='%H:%M').dt.time
-    
-    start = pd.to_datetime('08:30').time()
-    end = pd.to_datetime('19:30').time()
+
+    # Filtrage horaires
+    start, end = pd.to_datetime('08:30').time(), pd.to_datetime('19:30').time()
     data = data[
         (data['Day'].dt.dayofweek != 6) &
         (data['Patients'] != 0) &
@@ -138,55 +140,85 @@ def data_preprocessing(data):
         (data['Hour'] <= end)
     ].copy()
 
+    # Jours fériés
     all_holidays = holidays.country_holidays('FR', years=range(2020, 2031))
     holiday_dates = set(pd.to_datetime(list(all_holidays.keys())))
     holiday_dates.add(pd.to_datetime('2024-05-30'))
 
-    data.loc[:, 'Holiday'] = data['Day'].isin(holiday_dates).astype(int)
+    data['Holiday'] = data['Day'].isin(holiday_dates).astype(int)
     data = data.sort_values(['Day', 'Hour'])
-    data.loc[:, 'AfterHoliday'] = data['Day'].shift(48).isin(holiday_dates).astype(int)
 
-    school_holidays = SchoolHolidayDates()
-    data.loc[:, 'SchoolHoliday'] = data['Day'].apply(lambda x: school_holidays.is_holiday(x.date())).astype(int)
-
+    # Jour de semaine après férié (remplace AfterHoliday)
     data['DayOfWeek'] = data['Day'].dt.dayofweek
-    data['Month'] = data['Day'].dt.month
-    data['Year'] = data['Day'].dt.year
-    data['WeekOfYear'] = data['Day'].dt.isocalendar().week.astype(int)
+    data['AfterHoliday_Weekday'] = (
+        data['Day'].shift(48).isin(holiday_dates) & (data['DayOfWeek'] < 6)
+    ).astype(int)
+
+    # Vacances scolaires
+    school_holidays = SchoolHolidayDates()
+    data['SchoolHoliday'] = data['Day'].apply(lambda x: school_holidays.is_holiday(x.date())).astype(int)
+
+    # Caractéristiques temporelles
+    data['Month']       = data['Day'].dt.month
+    data['Year']        = data['Day'].dt.year
+    data['WeekOfYear']  = data['Day'].dt.isocalendar().week.astype(int)
     data['WeekOfMonth'] = ((data['Day'].dt.day - 1) // 7 + 1).astype(int)
 
+    # Extraction de la version originale pour analyse ou export
+    if 'ActiveClientsDay' not in data.columns:
+        data['ActiveClientsDay'] = 0
+    if 'ActiveClientsMonth' not in data.columns:
+        data['ActiveClientsMonth'] = 0
     cols = [
-        'Year', 'Month', 'WeekOfYear', 'WeekOfMonth', 'Day', 'Hour',
-        'ActiveClientsDay', 'ActiveClientsMonth', 'Patients',
-        'Holiday', 'AfterHoliday', 'SchoolHoliday'
+        'Year','Month','WeekOfYear','WeekOfMonth','Day','Hour',
+        'ActiveClientsDay','ActiveClientsMonth','Patients',
+        'Holiday','AfterHoliday_Weekday','SchoolHoliday','DayOfWeek'
     ]
     original = data[cols].copy()
 
+    # One-hot encoding
     for c in ['Hour', 'DayOfWeek']:
         data[c] = data[c].astype('category')
     data = pd.get_dummies(data, columns=['Hour', 'DayOfWeek'], drop_first=True)
 
+    # Nettoyage des noms de colonnes
     data.rename(columns=lambda col: re.sub(r'[^0-9A-Za-z_]', '_', col), inplace=True)
+
+    # Suppression conditionnelle des colonnes client
+    flag_day   = os.getenv('ActiveClientsDay', 'True').lower() in ('true','1','yes')
+    flag_month = os.getenv('ActiveClientsMonth', 'True').lower() in ('true','1','yes')
+    if not flag_day:
+        for df in (data, original):
+            df.drop(columns=['ActiveClientsDay'], inplace=True, errors='ignore')
+    if not flag_month:
+        for df in (data, original):
+            df.drop(columns=['ActiveClientsMonth'], inplace=True, errors='ignore')
 
     return data, original
 
 
+
 def main():
+
     config = get_connection_config()
     query = get_query()
     conn = get_connection(config)
     df = execute_query(conn, query)
     conn.close()
 
+
     print("Données extraites de la base de données :" f" {df.shape[0]} lignes, {df.shape[1]} colonnes")
 
     proc, orig = data_preprocessing(df)
 
-    print("\nAprès data_preprocessing:"
-          f" {proc.shape[0]} lignes, {proc.shape[1]} colonnes"
-          f"\nColonnes : {proc.columns.tolist()}")
-    print(proc.dtypes)
-    print(proc.head())
+    #print("\nAprès data_preprocessing:"
+    #      f" {proc.shape[0]} lignes, {proc.shape[1]} colonnes"
+    #      f"\nColonnes : {proc.columns.tolist()}")
+    #print(proc.dtypes)
+    #print(proc.head())
+
+    #print(orig.shape)
+    #print(orig.dtypes)
 
     return proc, orig
 
