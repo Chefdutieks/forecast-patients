@@ -37,5 +37,5 @@ Below is a short description of each Python module.
 4. **Generate forecasts** – Use `python predict.py` to create CSV files with future predictions.
 5. **Serve predictions** – Launch the API locally with `python api.py` and send authenticated GET requests to `/predict`.
 
-The scripts rely on external libraries such as `pandas`, `scikit-learn`, `xgboost` and `lightgbm`. Install the project requirements to reproduce the results.
+The scripts rely on external libraries such as `pandas`, `scikit-learn`, `xgboost` and `lightgbm`. Install the project requirements with `pip install -r requirements.txt` to reproduce the results.
 
