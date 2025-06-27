@@ -1,0 +1,16 @@
+pandas
+numpy
+matplotlib
+seaborn
+scikit-learn
+lightgbm
+xgboost
+pymssql
+Flask
+python-dotenv
+google-api-python-client
+google-auth
+holidays
+vacances-scolaires-france
+statsmodels
+joblib
